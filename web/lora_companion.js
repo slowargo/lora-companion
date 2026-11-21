@@ -9,9 +9,11 @@
 // Things that do not work with the current frontend and must be avoided:
 //  * Patching a row widget's prototype. LGraphNode.addCustomWidget copies the widget's prototype
 //    members onto the instance and swaps its prototype for a shared LegacyWidget class.
-//  * Relying on the row's `value` setter. The frontend merges `value` with its own accessor, so
-//    assigning a value (workflow load, Duplicate) never runs rgthree's setter, which is what made
-//    rgthree fetch the row's info.
+//  * Relying on the row's `value` setter. The frontend merges `value` with its own accessor and
+//    runs rgthree's setter before storing the new value, so the getLoraInfo() that setter calls
+//    still reads the old (empty) LoRA on workflow load and Duplicate.
+//  * Relying on rgthree's info cache being refreshed by its ws event: LoraInfoService registers
+//    its listener before its event name is assigned, so it never receives it.
 // Info dialogs and node classes are not adopted that way; patching their prototypes is fine.
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
@@ -79,30 +81,49 @@ function infoKey(lora) {
   return `${lora}\n${INFO_VERSION.get(lora) ?? 0}`;
 }
 
+const RETRY_MS = 5000;
+
 // Replaces rgthree's getLoraInfo(force) on one row: same service call, but cached per
-// LoRA + version instead of once per row, and a stale response never overwrites a newer one.
-// draw() loads it whenever the key changed, which covers workflow load, Duplicate, the chooser
-// and info refreshes without depending on the value setter.
+// LoRA + version instead of once per row. The row's latest result (lcInfo) is authoritative:
+// draw() loads it whenever the key changed (workflow load, Duplicate, chooser, info refresh) and
+// puts it back if rgthree code cleared or overwrote loraInfo (onLoraClick sets it to null; a
+// response from rgthree's original getLoraInfo can land late). A failed request is retried.
 function patchRowInfo(w, infoService) {
   w.getLoraInfo = function (force = false) {
     const lora = this.value?.lora;
     const key = infoKey(lora);
     if (!force && this.loraInfoPromise && this.lcInfoKey === key) return this.loraInfoPromise;
     this.lcInfoKey = key;
+    this.lcInfoReady = false;
     const fetched = lora && lora !== "None" ? infoService.getInfo(lora, force, true) : Promise.resolve(null);
-    const promise = fetched.then((info) => {
-      if (this.loraInfoPromise === promise) {
-        this.loraInfo = info;
-        app.canvas?.setDirty(true, true);
-      }
-      return info;
-    });
+    const promise = fetched.then(
+      (info) => {
+        if (this.loraInfoPromise === promise) {
+          this.lcInfo = this.loraInfo = info;
+          this.lcInfoReady = true;
+          app.canvas?.setDirty(true, true);
+        }
+        return info;
+      },
+      (e) => {
+        if (this.loraInfoPromise === promise) {
+          this.lcInfoKey = null;
+          this.lcRetryAt = Date.now() + RETRY_MS;
+        }
+        console.warn(TAG, "loading LoRA info failed", lora, e);
+        return null;
+      },
+    );
     this.loraInfoPromise = promise;
     return promise;
   };
   const draw = w.draw;
   w.draw = function () {
-    if (this.lcInfoKey !== infoKey(this.value?.lora)) this.getLoraInfo();
+    if (this.lcInfoKey !== infoKey(this.value?.lora)) {
+      if (!(this.lcRetryAt > Date.now())) this.getLoraInfo();
+    } else if (this.lcInfoReady && this.loraInfo !== this.lcInfo) {
+      this.loraInfo = this.lcInfo;
+    }
     return draw.apply(this, arguments);
   };
   w.loraInfoPromise = null; // drop whatever the original fetched for the initial empty value
@@ -415,10 +436,17 @@ app.registerExtension({
     document.head.append(el("style", { text: CSS }));
     api.addEventListener("lora-companion.stats", (e) => applyStats(e.detail?.stats));
     api.addEventListener("reconnected", loadAllStats);
-    api.addEventListener("rgthree-refreshed-loras-info", (e) => {
-      const file = e.detail?.data?.file;
-      if (!file) return;
-      INFO_VERSION.set(file, (INFO_VERSION.get(file) ?? 0) + 1);
+    api.addEventListener("rgthree-refreshed-loras-info", async (e) => {
+      const info = e.detail?.data;
+      if (!info?.file) return;
+      // rgthree's own listener never fires (see top); refresh its cache before rows refetch,
+      // or they may read the old entry while the refresh request is still in flight.
+      try {
+        (await rgthree).infoService.setFreshInfo(info.file, info);
+      } catch {
+        // already reported
+      }
+      INFO_VERSION.set(info.file, (INFO_VERSION.get(info.file) ?? 0) + 1);
       app.canvas?.setDirty(true, true);
     });
     watchChooserMenus();
