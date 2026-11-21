@@ -14,8 +14,8 @@ Adds no graph nodes.
   - Recognised loaders: Power Lora Loader, and any node with a `lora_name` input (`LoraLoader`,
     `LoraLoaderModelOnly`, and similar).
 - **Like / dislike counters** in the Power Lora Loader LoRA info dialog (`+` / `−`, never below 0).
-- **LoRA chooser** shows `(uses)` after each LoRA name and scrolls to and highlights the row's
-  current LoRA.
+- **LoRA chooser** shows `(uses · 👍likes 👎dislikes)` after each LoRA name (zero counts omitted) and scrolls to and highlights the row's
+  current LoRA. Switching an existing row to a different LoRA resets its toggle to on and its strength(s) to 1.
 - **Info dialog extras**:
   - LoRA type (LoRA / LoHa / LoKr / OFT / DoRA …, read from the safetensors header) and whether its
     order in the loader matters.

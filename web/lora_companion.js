@@ -1,7 +1,8 @@
 // lora-companion frontend. Extends rgthree's Power Lora Loader without patching rgthree:
 //  * LoRA info dialog: Usage and Rating (like/dislike) rows, LoRA Type, Civitai description,
 //    civitai.red links, and the Additional Notes edit box keeps its text.
-//  * "Choose a lora" menu: "(uses)" after each LoRA and the row's current LoRA highlighted.
+//  * "Choose a lora" menu: "(uses · 👍likes 👎dislikes)" after each LoRA and the row's current LoRA highlighted.
+//  * Switching a row to a different LoRA in the chooser resets its toggle to on and strength(s) to 1.
 //  * Loader rows load their LoRA info (info icon, strength min/max hints) reliably.
 // rgthree internals are reached through dynamic imports and checked before use; if something is
 // missing, that feature is skipped with a console warning.
@@ -137,10 +138,50 @@ let pendingPrefix = null; // {prefix, t}: prefix the node's Match property strip
 function patchRowChooser(w) {
   const area = w.hitAreas.lora;
   const onClick = area.onClick;
-  area.onClick = function () {
-    pendingCurrent = { value: this.value?.lora, t: Date.now() };
+  area.onClick = function (event, pos, node) {
+    const before = this.value?.lora;
+    pendingCurrent = { value: before, t: Date.now() };
+    if (before && before !== "None" && typeof node?.showLoraChooser === "function") {
+      wrapNextChoose(node, (value) => {
+        if (value !== before) resetRow(this, node);
+      });
+    }
     return onClick.apply(this, arguments);
   };
+}
+
+// Hooks the onChoose callback of the next node.showLoraChooser call only (the one the row's
+// onClick is about to make), then restores the method.
+function wrapNextChoose(node, after) {
+  const own = Object.prototype.hasOwnProperty.call(node, "showLoraChooser");
+  const prev = node.showLoraChooser;
+  const restore = () => {
+    if (own) node.showLoraChooser = prev;
+    else delete node.showLoraChooser;
+  };
+  node.showLoraChooser = function (event, onChoose) {
+    restore();
+    return prev.call(this, event, function (value) {
+      const r = onChoose.apply(this, arguments);
+      try {
+        after(value);
+      } catch (e) {
+        console.warn(TAG, e);
+      }
+      return r;
+    });
+  };
+  setTimeout(restore, 0); // onClick normally calls it synchronously; never leave the hook behind
+}
+
+// A row switched to a different LoRA starts from the "+ Add Lora" defaults.
+function resetRow(w, node) {
+  const v = w.value;
+  if (!v) return;
+  v.on = true;
+  v.strength = 1;
+  if (v.strengthTwo != null) v.strengthTwo = 1;
+  node.setDirtyCanvas?.(true, true);
 }
 
 function isLoraRow(w) {
@@ -229,8 +270,12 @@ function onChooserMenu(menu) {
   const current = fresh(pendingCurrent)?.value;
   pendingPrefix = pendingCurrent = null;
   for (const entry of menu.querySelectorAll(".litemenu-entry")) {
-    const uses = STATS.get(prefix + entry.textContent)?.uses;
-    if (uses > 0) entry.dataset.lcCount = String(uses);
+    const s = STATS.get(prefix + entry.textContent);
+    const uses = s?.uses || 0, likes = s?.likes || 0, dislikes = s?.dislikes || 0;
+    if (uses > 0 || likes > 0 || dislikes > 0) {
+      const rating = [likes > 0 ? `👍${likes}` : "", dislikes > 0 ? `👎${dislikes}` : ""].filter(Boolean).join(" ");
+      entry.dataset.lcCount = rating ? `${uses} · ${rating}` : String(uses);
+    }
   }
   // The filter is set up after the menu is inserted.
   if (current?.startsWith(prefix)) requestAnimationFrame(() => selectMenuEntry(menu, current.slice(prefix.length)));
