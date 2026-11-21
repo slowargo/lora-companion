@@ -16,17 +16,15 @@ import os
 import time
 
 import folder_paths
+import nodes
+from PIL import Image
 
 from .scan import used_loras, match_lora
 from .store import LOG
 
 
 def _output_nodes(prompt):
-  try:
-    import nodes as comfy_nodes
-    mappings = comfy_nodes.NODE_CLASS_MAPPINGS
-  except Exception:
-    mappings = {}
+  mappings = nodes.NODE_CLASS_MAPPINGS
   consumed = set()
   for node in prompt.values():
     for v in (node.get("inputs") or {}).values():
@@ -44,7 +42,6 @@ def _output_nodes(prompt):
 
 
 def _read_prompt(path):
-  from PIL import Image
   with Image.open(path) as im:
     text = im.info.get("prompt")
   if not text:

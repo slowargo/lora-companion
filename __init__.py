@@ -18,6 +18,7 @@ from server import PromptServer
 from .lc.store import Store, LOG
 from .lc.scan import used_loras
 from .lc.fingerprint import lora_type
+from .lc import backfill
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
@@ -151,7 +152,6 @@ async def api_info(request):
 async def api_backfill(request):
   """Backfill uses from output PNG metadata. ?apply=1 writes; default is a dry run.
   Optional JSON body {"aliases": {"old lora name": "current relative path"}} for renamed files."""
-  from .lc import backfill
   apply = request.query.get("apply") == "1"
   try:
     body = await request.json() if request.can_read_body else {}
