@@ -143,7 +143,7 @@ function patchRowChooser(w) {
     pendingCurrent = { value: before, t: Date.now() };
     if (before && before !== "None" && typeof node?.showLoraChooser === "function") {
       wrapNextChoose(node, (value) => {
-        if (value !== before) resetRow(this, node);
+        if (value !== before) resetRow(this);
       });
     }
     return onClick.apply(this, arguments);
@@ -156,10 +156,11 @@ function wrapNextChoose(node, after) {
   const own = Object.prototype.hasOwnProperty.call(node, "showLoraChooser");
   const prev = node.showLoraChooser;
   const restore = () => {
+    if (node.showLoraChooser !== hook) return;
     if (own) node.showLoraChooser = prev;
     else delete node.showLoraChooser;
   };
-  node.showLoraChooser = function (event, onChoose) {
+  const hook = (node.showLoraChooser = function (event, onChoose) {
     restore();
     return prev.call(this, event, function (value) {
       const r = onChoose.apply(this, arguments);
@@ -170,18 +171,17 @@ function wrapNextChoose(node, after) {
       }
       return r;
     });
-  };
+  });
   setTimeout(restore, 0); // onClick normally calls it synchronously; never leave the hook behind
 }
 
-// A row switched to a different LoRA starts from the "+ Add Lora" defaults.
-function resetRow(w, node) {
+// A row switched to a different LoRA starts from the "+ Add Lora" defaults. rgthree redraws after onChoose.
+function resetRow(w) {
   const v = w.value;
   if (!v) return;
   v.on = true;
   v.strength = 1;
   if (v.strengthTwo != null) v.strengthTwo = 1;
-  node.setDirtyCanvas?.(true, true);
 }
 
 function isLoraRow(w) {
