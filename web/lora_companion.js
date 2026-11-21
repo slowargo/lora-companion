@@ -1,6 +1,6 @@
 // lora-companion frontend. Extends rgthree's Power Lora Loader without patching rgthree:
 //  * LoRA info dialog: Usage and Rating (like/dislike) rows, LoRA Type, Civitai description,
-//    civitai.red links, and the Additional Notes edit box keeps its text.
+//    civitai.red links, and the Additional Notes edit box keeps its text and saves on Ctrl+Enter.
 //  * "Choose a lora" menu: "(uses · 👍likes 👎dislikes)" after each LoRA and the row's current LoRA highlighted.
 //  * Switching a row to a different LoRA in the chooser resets its toggle to on and strength(s) to 1.
 //  * Loader rows load their LoRA info (info icon, strength min/max hints) reliably.
@@ -457,6 +457,13 @@ function patchInfoDialog(LoraDialog) {
     const result = await handleEventAction.apply(this, arguments);
     const ta = text != null ? td.querySelector("textarea") : null;
     if (ta && !ta.value) ta.value = text;
+    // Ctrl/Cmd+Enter saves the textarea, same as its disk button (plain Enter stays a newline).
+    ta?.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      tr.querySelector('button[data-action="edit-row"]')?.click();
+    });
     return result;
   };
 }

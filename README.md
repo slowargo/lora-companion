@@ -21,7 +21,7 @@ Adds no graph nodes.
     order in the loader matters.
   - Civitai version description as plain text.
   - Civitai links open civitai.red.
-  - The Additional Notes edit box keeps the existing text.
+  - The Additional Notes edit box keeps the existing text; Ctrl+Enter (Cmd+Enter) saves it.
 - **Info icon fix**: with the current ComfyUI frontend, Power Lora Loader rows never load their LoRA
   info after a workflow is opened, so every info icon is gray and the strength min/max hints are
   missing. Rows now load their info when drawn, again when the LoRA changes, and after the info is
