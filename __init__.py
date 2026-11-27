@@ -197,7 +197,7 @@ _PAGE = os.path.join(os.path.dirname(__file__), "page", "downloader.html")
 
 @routes.get("/lora-companion/downloader")
 async def dl_page(request):
-  return web.FileResponse(_PAGE)
+  return web.FileResponse(_PAGE, headers={"Cache-Control": "no-cache"})
 
 
 async def _dl_call(fn, *args):
