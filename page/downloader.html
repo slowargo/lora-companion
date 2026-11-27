@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LoRA Downloader</title>
+<style>
+:root {
+  --bg: #f6f6f4; --panel: #fff; --text: #1d1d1b; --muted: #6b6b66; --line: #deddd8;
+  --accent: #2f6fd6; --ok: #2e8b57; --bad: #c0392b; --warn: #b7791f; --bar: #e8e7e2;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #18181a; --panel: #222225; --text: #e8e8e6; --muted: #9a9a95; --line: #36363a;
+    --accent: #5b93ee; --ok: #4fb47c; --bad: #e0675a; --warn: #d9a441; --bar: #34343a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, "Segoe UI", sans-serif; }
+main { max-width: 860px; margin: 0 auto; padding: 20px 16px 60px; }
+header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+label { display: block; font-weight: 600; margin: 12px 0 4px; }
+label:first-child { margin-top: 0; }
+input, select, textarea, button { font: inherit; color: inherit; }
+input[type=text], input[type=password], select, textarea {
+  width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg);
+}
+textarea { min-height: 70px; resize: vertical; }
+button { padding: 7px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .5; cursor: default; }
+button.small { padding: 2px 9px; font-size: 12px; }
+.row { display: flex; gap: 8px; align-items: center; }
+.row > .grow { flex: 1; min-width: 0; }
+.ext { color: var(--muted); white-space: nowrap; }
+.muted { color: var(--muted); }
+.hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.err { color: var(--bad); }
+.warn { color: var(--warn); }
+.preview { margin-top: 10px; padding: 10px 12px; border-radius: 6px; background: var(--bg); }
+.preview b { font-size: 15px; }
+.actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; align-items: center; }
+.actions .msg { margin-right: auto; }
+.job { border-top: 1px solid var(--line); padding: 10px 0; }
+.job:first-of-type { border-top: 0; }
+.job .name { font-weight: 600; word-break: break-all; }
+.job .meta { font-size: 12px; color: var(--muted); }
+.bar { height: 6px; border-radius: 3px; background: var(--bar); margin: 6px 0 2px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+.st { font-size: 12px; font-weight: 600; text-transform: uppercase; }
+.st.done { color: var(--ok); } .st.failed { color: var(--bad); } .st.canceled { color: var(--muted); }
+.st.downloading, .st.info { color: var(--accent); }
+#settings[hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Civitai LoRA Downloader</h1>
+    <button id="toggle-settings">Settings</button>
+  </header>
+
+  <section id="settings" hidden>
+    <h2>Settings</h2>
+    <label for="cfg-root">Root folder (relative to <span id="loras-dir" class="muted"></span>)</label>
+    <input id="cfg-root" type="text" placeholder="empty = loras folder itself">
+    <label for="cfg-exclude">Hidden subfolders (comma separated)</label>
+    <input id="cfg-exclude" type="text">
+    <label for="cfg-strip">Words removed from the title (comma separated; the version's base model is always removed)</label>
+    <input id="cfg-strip" type="text" placeholder="e.g. kr2, lora">
+    <label for="cfg-auth">Civitai API key or cookie <span id="auth-state" class="muted"></span></label>
+    <input id="cfg-auth" type="password" autocomplete="off" placeholder="leave empty to keep the current one">
+    <div class="hint">API key: civitai.com → Account settings → API Keys. Or paste the request Cookie header from a logged-in civitai page.</div>
+    <div class="actions">
+      <span class="msg" id="cfg-msg"></span>
+      <button id="cfg-clear-auth">Remove key / cookie</button>
+      <button id="cfg-save" class="primary">Save</button>
+    </div>
+  </section>
+
+  <section>
+    <label for="url">Civitai URL</label>
+    <input id="url" type="text" placeholder="https://civitai.com/models/…?modelVersionId=…" autofocus>
+    <div id="preview"></div>
+    <label for="subdir">Folder</label>
+    <select id="subdir"></select>
+    <label for="stem">File name</label>
+    <div class="row">
+      <input id="stem" class="grow" type="text">
+      <span class="ext" id="ext">.safetensors</span>
+      <button id="stem-reset" title="Back to the default name">Reset</button>
+    </div>
+    <label for="note">Additional Notes</label>
+    <textarea id="note"></textarea>
+    <div class="actions">
+      <span class="msg" id="submit-msg"></span>
+      <button id="submit" class="primary" disabled>Download</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="row"><h2 class="grow">Downloads</h2><button id="clear" class="small">Clear finished</button></div>
+    <div id="jobs"><div class="muted">No downloads yet.</div></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const list = (s) => s.split(",").map((v) => v.trim()).filter(Boolean);
+const size = (n) => n >= 1 << 30 ? (n / (1 << 30)).toFixed(2) + " GB" : (n / (1 << 20)).toFixed(1) + " MB";
+let resolved = null;
+let resolveSeq = 0;
+
+async function call(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+  if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+function store(key, value) {
+  try { value === undefined ? (value = localStorage.getItem(key)) : localStorage.setItem(key, value); } catch {}
+  return value;
+}
+
+function showConfig(cfg) {
+  $("loras-dir").textContent = cfg.loras_dir;
+  $("cfg-root").value = cfg.root;
+  $("cfg-exclude").value = cfg.exclude.join(", ");
+  $("cfg-strip").value = cfg.title_strip.join(", ");
+  $("cfg-auth").value = "";
+  $("auth-state").textContent = cfg.auth ? `(${cfg.auth} set)` : "(not set — most downloads need one)";
+  const sel = $("subdir");
+  const keep = sel.value || store("lc-dl-subdir");
+  sel.innerHTML = cfg.subdirs.map((d) => `<option value="${esc(d)}">${esc(d || "(root)")}</option>`).join("");
+  if (cfg.subdirs.includes(keep)) sel.value = keep;
+  if (!cfg.auth) $("settings").hidden = false;
+}
+
+async function saveConfig(extra) {
+  $("cfg-msg").textContent = "";
+  try {
+    showConfig(await call("/lora-companion/dl/config", {
+      root: $("cfg-root").value, exclude: list($("cfg-exclude").value), title_strip: list($("cfg-strip").value), ...extra,
+    }));
+    $("cfg-msg").textContent = "Saved.";
+  } catch (e) {
+    $("cfg-msg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }
+}
+
+$("toggle-settings").onclick = () => { $("settings").hidden = !$("settings").hidden; };
+$("cfg-save").onclick = () => saveConfig($("cfg-auth").value.trim() ? { auth: $("cfg-auth").value.trim() } : {});
+$("cfg-clear-auth").onclick = () => saveConfig({ auth: "" });
+$("subdir").onchange = () => store("lc-dl-subdir", $("subdir").value);
+
+function showResolved(info) {
+  resolved = info;
+  $("submit").disabled = !info;
+  if (!info) return;
+  $("stem").value = info.stem;
+  $("ext").textContent = info.ext;
+  const title = info.clean_title !== info.title ? `${esc(info.clean_title)} <span class="muted">(${esc(info.title)})</span>` : esc(info.title);
+  $("preview").innerHTML = `<div class="preview">
+    <b>${title}</b> · ${esc(info.version_name)}<br>
+    <span class="muted">${esc(info.type)} · ${esc(info.base_model)} · ${esc(info.file_name)} · ${size(info.size)}</span>
+    ${info.existing ? `<div class="warn">Already downloaded: ${esc(info.existing)}</div>` : ""}
+  </div>`;
+}
+
+async function resolveUrl() {
+  const url = $("url").value.trim();
+  const seq = ++resolveSeq;
+  showResolved(null);
+  $("preview").innerHTML = "";
+  if (!url) return;
+  $("preview").innerHTML = `<div class="preview muted">Looking up…</div>`;
+  try {
+    const info = await call(`/lora-companion/dl/resolve?url=${encodeURIComponent(url)}`);
+    if (seq === resolveSeq) showResolved(info);
+  } catch (e) {
+    if (seq === resolveSeq) $("preview").innerHTML = `<div class="preview err">${esc(e.message)}</div>`;
+  }
+}
+
+let urlTimer;
+$("url").oninput = () => { clearTimeout(urlTimer); urlTimer = setTimeout(resolveUrl, 400); };
+$("stem-reset").onclick = () => { if (resolved) $("stem").value = resolved.stem; };
+
+$("submit").onclick = async () => {
+  if (!resolved) return;
+  $("submit").disabled = true;
+  $("submit-msg").textContent = "";
+  try {
+    const job = await call("/lora-companion/dl/jobs", {
+      url: $("url").value.trim(), subdir: $("subdir").value, stem: $("stem").value, note: $("note").value,
+    });
+    $("submit-msg").textContent = `Queued: ${job.stem}${job.ext}`;
+    $("url").value = $("stem").value = $("note").value = "";
+    $("preview").innerHTML = "";
+    showResolved(null);
+    $("url").focus();
+    poll();
+  } catch (e) {
+    $("submit-msg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+    $("submit").disabled = false;
+  }
+};
+
+const STATUS = { queued: "Queued", downloading: "Downloading", info: "Writing info", done: "Done", failed: "Failed", canceled: "Canceled" };
+
+function renderJobs(jobs) {
+  if (!jobs.length) {
+    $("jobs").innerHTML = `<div class="muted">No downloads yet.</div>`;
+    return;
+  }
+  $("jobs").innerHTML = jobs.slice().reverse().map((j) => {
+    const pct = j.size ? Math.min(100, (j.done / j.size) * 100) : 0;
+    const active = ["queued", "downloading", "info"].includes(j.status);
+    const buttons = active ? `<button class="small" data-act="cancel" data-id="${j.id}">Cancel</button>`
+      : `${j.status !== "done" ? `<button class="small" data-act="retry" data-id="${j.id}">Retry</button>` : ""}
+         <button class="small" data-act="remove" data-id="${j.id}">Remove</button>`;
+    const progress = j.status === "downloading"
+      ? `${size(j.done)} / ${size(j.size)} · ${pct.toFixed(0)}%${j.speed ? ` · ${size(j.speed)}/s` : ""}` : "";
+    return `<div class="job">
+      <div class="row"><span class="st ${j.status}">${STATUS[j.status] || j.status}</span>
+        <span class="name grow">${esc(j.subdir ? j.subdir + "/" : "")}${esc(j.stem)}${esc(j.ext)}</span>${buttons}</div>
+      ${j.status === "downloading" || (j.status === "failed" && j.done) ? `<div class="bar"><div style="width:${pct}%"></div></div>` : ""}
+      <div class="meta"><a href="${esc(j.page_url)}" target="_blank" rel="noopener">${esc(j.title)} · ${esc(j.version_name)}</a>
+        ${progress ? " · " + progress : ""}</div>
+      ${j.error ? `<div class="meta err">${esc(j.error)}</div>` : ""}
+      ${j.warning ? `<div class="meta warn">${esc(j.warning)}</div>` : ""}
+      ${j.note ? `<div class="meta">Note: ${esc(j.note)}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+$("jobs").onclick = async (e) => {
+  const b = e.target.closest("button[data-act]");
+  if (!b) return;
+  try {
+    await call(`/lora-companion/dl/jobs/${b.dataset.id}/${b.dataset.act}`, {});
+  } catch (err) {
+    alert(err.message);
+  }
+  poll();
+};
+$("clear").onclick = async () => { await call("/lora-companion/dl/clear", {}); poll(); };
+
+let pollTimer;
+async function poll() {
+  clearTimeout(pollTimer);
+  let active = false;
+  try {
+    const { jobs } = await call("/lora-companion/dl/jobs");
+    renderJobs(jobs);
+    active = jobs.some((j) => ["queued", "downloading", "info"].includes(j.status));
+  } catch {}
+  pollTimer = setTimeout(poll, active ? 1000 : 5000);
+}
+
+call("/lora-companion/dl/config").then(showConfig).catch((e) => { $("cfg-msg").textContent = e.message; });
+poll();
+</script>
+</body>
+</html>

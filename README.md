@@ -1,6 +1,6 @@
 # lora-companion
 
-LoRA usage statistics and quality-of-life additions for
+LoRA usage statistics, a Civitai downloader and quality-of-life additions for
 [rgthree's Power Lora Loader](https://github.com/rgthree/rgthree-comfy), without patching rgthree.
 Adds no graph nodes.
 
@@ -28,6 +28,22 @@ Adds no graph nodes.
   refreshed (for example by a Civitai fetch in the info dialog).
 
 Counts update live in all open tabs after each run or vote.
+
+## Civitai downloader
+
+`http://127.0.0.1:8188/lora-companion/downloader` downloads a LoRA from a civitai.com or
+civitai.red model URL into a subfolder of the loras folder.
+
+- The default file name is the model title plus the original file name. Words listed in Settings and
+  the version's base model name (e.g. `Krea 2`) are removed from the title. The name can be edited.
+- After the download (sha256 checked) rgthree builds the `.rgthree-info.json`, and the page's note
+  is saved as its Additional Notes.
+- Submit as many downloads as you like; they run one at a time. The queue is kept in
+  `user/lora-companion/downloads.json`, and an interrupted download resumes after a restart.
+- Settings (`user/lora-companion/downloader.json`): root folder relative to the loras folder, hidden
+  subfolders, title words to remove. Most Civitai downloads need an API key (Civitai account
+  settings → API Keys) or a logged-in Cookie header; it is stored in
+  `user/lora-companion/civitai_auth.txt` and only sent to the Civitai host of the URL.
 
 ## Install
 

@@ -19,6 +19,7 @@ from .lc.store import Store, LOG
 from .lc.scan import used_loras
 from .lc.fingerprint import lora_type
 from .lc import backfill
+from .lc import downloader
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
@@ -118,6 +119,12 @@ _warm = threading.Timer(20.0, lambda: _worker.submit(STORE.warm))
 _warm.daemon = True
 _warm.start()
 
+# Started late so a resumed job's rgthree info call finds the server listening.
+DOWNLOADER = downloader.Downloader()
+_dl_start = threading.Timer(10.0, DOWNLOADER.start)
+_dl_start.daemon = True
+_dl_start.start()
+
 routes = PromptServer.instance.routes
 
 
@@ -183,3 +190,66 @@ async def api_vote(request):
     return web.json_response({"error": "not found"}, status=404)
   _push({file: stats})
   return web.json_response({"file": file, "stats": stats})
+
+
+_PAGE = os.path.join(os.path.dirname(__file__), "page", "downloader.html")
+
+
+@routes.get("/lora-companion/downloader")
+async def dl_page(request):
+  return web.FileResponse(_PAGE)
+
+
+async def _dl_call(fn, *args):
+  try:
+    return web.json_response(await asyncio.to_thread(fn, *args))
+  except (ValueError, KeyError, OSError) as e:  # requests errors are OSErrors
+    return web.json_response({"error": str(e)}, status=400)
+
+
+async def _body(request):
+  try:
+    body = await request.json()
+  except ValueError:
+    body = None
+  return body if isinstance(body, dict) else {}
+
+
+@routes.get("/lora-companion/dl/config")
+async def dl_get_config(request):
+  return await _dl_call(downloader.public_config)
+
+
+@routes.post("/lora-companion/dl/config")
+async def dl_set_config(request):
+  return await _dl_call(downloader.save_config, await _body(request))
+
+
+@routes.get("/lora-companion/dl/resolve")
+async def dl_resolve(request):
+  return await _dl_call(downloader.resolve, request.query.get("url", ""))
+
+
+@routes.get("/lora-companion/dl/jobs")
+async def dl_jobs(request):
+  return web.json_response({"jobs": DOWNLOADER.list()})
+
+
+@routes.post("/lora-companion/dl/jobs")
+async def dl_submit(request):
+  b = await _body(request)
+  return await _dl_call(DOWNLOADER.submit, str(b.get("url", "")), str(b.get("subdir", "")),
+                        str(b.get("stem", "")), str(b.get("note", "")))
+
+
+@routes.post("/lora-companion/dl/jobs/{id}/{action}")
+async def dl_action(request):
+  action = request.match_info["action"]
+  if action not in ("cancel", "retry", "remove"):
+    return web.json_response({"error": "bad action"}, status=400)
+  return await _dl_call(lambda: DOWNLOADER.action(request.match_info["id"], action) or {"ok": True})
+
+
+@routes.post("/lora-companion/dl/clear")
+async def dl_clear(request):
+  return await _dl_call(lambda: DOWNLOADER.clear_finished() or {"ok": True})
