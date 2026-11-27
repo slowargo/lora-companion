@@ -40,6 +40,10 @@ def _read_json(path, default):
       return json.load(f)
   except FileNotFoundError:
     return default
+  except ValueError:
+    logging.warning("%s %s is corrupt, moved to %s.bad", LOG, path, path)
+    os.replace(path, path + ".bad")
+    return default
 
 
 def _write_json(path, data):
@@ -47,6 +51,8 @@ def _write_json(path, data):
   tmp = path + ".tmp"
   with open(tmp, "w", encoding="utf-8") as f:
     json.dump(data, f, ensure_ascii=False, indent=1)
+    f.flush()
+    os.fsync(f.fileno())
   os.replace(tmp, path)
 
 
@@ -224,9 +230,13 @@ def resolve(url):
     raise ValueError("version has no model file")
   f = files[0]
   title = (v.get("model") or {}).get("name") or ""
-  words = load_config()["title_strip"] + [w for w in [v.get("baseModel")] if w]
+  words = load_config()["title_strip"] + [w for w in [v.get("baseModel")] if w and w != "Other"]
   clean = clean_title(title, words)
   sha256 = ((f.get("hashes") or {}).get("SHA256") or "").lower()
+  ext = os.path.splitext(f.get("name") or "")[1]
+  download_url = f.get("downloadUrl") or v.get("downloadUrl") or ""
+  if urlparse(download_url).hostname not in ("civitai.com", "civitai.red"):
+    raise ValueError(f"unexpected download host in {download_url!r}")
   return {
     "host": host,
     "model_id": v.get("modelId"),
@@ -240,9 +250,9 @@ def resolve(url):
     "file_name": f.get("name"),
     "size": int((f.get("sizeKB") or 0) * 1024),
     "sha256": sha256,
-    "download_url": f.get("downloadUrl") or v.get("downloadUrl"),
+    "download_url": download_url,
     "stem": default_stem(clean, f.get("name") or ""),
-    "ext": os.path.splitext(f.get("name") or "")[1] or ".safetensors",
+    "ext": ext if re.fullmatch(r"\.[A-Za-z0-9]+", ext) else ".safetensors",
     "existing": _find_existing(sha256) if sha256 else None,
   }
 
@@ -252,12 +262,25 @@ def resolve(url):
 
 def _local_base():
   host = (args.listen or "127.0.0.1").split(",")[0].strip()
-  if host in ("", "0.0.0.0", "::"):
+  if host in ("", "0.0.0.0"):
     host = "127.0.0.1"
+  elif host == "::":
+    host = "::1"
   if ":" in host:
     host = f"[{host}]"
   scheme = "https" if args.tls_keyfile and args.tls_certfile else "http"
   return f"{scheme}://{host}:{PromptServer.instance.port}"
+
+
+def _local_get(path, **kwargs):
+  s = requests.Session()
+  s.trust_env = False  # never route the call to this server through HTTP(S)_PROXY
+  base = _local_base()
+  return s.get(base + path, verify=not base.startswith("https"), timeout=600, **kwargs)
+
+
+def _part(job):
+  return f"{job['target']}.{job['id']}.part"
 
 
 class Downloader:
@@ -278,13 +301,22 @@ class Downloader:
     self.thread.start()
 
   def _save(self):
-    _write_json(JOBS_FILE, [{k: v for k, v in j.items() if k != "speed"} for j in self.jobs])
+    # Memory is the source of truth; a failed write (file locked, disk full) is redone on the next change.
+    try:
+      _write_json(JOBS_FILE, [{k: v for k, v in j.items() if k != "speed"} for j in self.jobs])
+    except OSError as e:
+      logging.warning("%s could not save %s: %s", LOG, JOBS_FILE, e)
 
   def _get(self, job_id):
     for job in self.jobs:
       if job["id"] == job_id:
         return job
     raise KeyError(job_id)
+
+  def _taken(self, target, job_id=None):
+    key = os.path.normcase(target)
+    return any(j["id"] != job_id and j["status"] != "done" and os.path.normcase(j["target"]) == key
+               for j in self.jobs)
 
   def list(self):
     with self.lock:
@@ -299,14 +331,16 @@ class Downloader:
     if not stem:
       raise ValueError("empty file name")
     target = os.path.join(root_dir(cfg), subdir, stem + info["ext"])
+    if "," in os.path.relpath(target, loras_dir()):
+      raise ValueError("the folder path contains a comma, which rgthree cannot handle")
     if os.path.exists(target):
       raise ValueError("file already exists")
     job = {**info, "id": uuid.uuid4().hex[:12], "subdir": subdir, "stem": stem, "note": note or "",
            "target": target, "status": "queued", "error": "", "warning": "", "done": 0, "speed": 0,
-           "downloaded": False, "created": time.time(), "finished": None}
+           "downloaded": False, "created": time.time(), "started": None, "finished": None}
     with self.lock:
-      if any(j["status"] in ACTIVE and j["target"] == target for j in self.jobs):
-        raise ValueError("already queued to the same file")
+      if self._taken(target):
+        raise ValueError("another job in the list uses the same file name")
       self.jobs.append(job)
       self._save()
       self.lock.notify_all()
@@ -315,17 +349,21 @@ class Downloader:
   def action(self, job_id, action):
     with self.lock:
       job = self._get(job_id)
-      if action == "cancel" and job["status"] in ACTIVE:
-        if job["status"] == "queued":
-          job["status"] = "canceled"
-        else:
-          self.cancel.add(job_id)
-      elif action == "retry" and job["status"] in ("failed", "canceled"):
+      status = job["status"]
+      if action == "cancel" and status == "queued":
+        job["status"] = "canceled"
+      elif action == "cancel" and status == "downloading":
+        self.cancel.add(job_id)
+      elif action == "retry" and status in ("failed", "canceled"):
+        if self._taken(job["target"], job_id) or (not job["downloaded"] and os.path.exists(job["target"])):
+          raise ValueError("the file name is now used by another job or file")
         job.update(status="queued", error="", warning="")
-      elif action == "remove" and job["status"] not in ACTIVE:
+      elif action == "remove" and status not in ACTIVE:
         self.jobs.remove(job)
+        if os.path.exists(_part(job)):
+          os.remove(_part(job))
       else:
-        raise ValueError(f"cannot {action} a {job['status']} job")
+        raise ValueError(f"cannot {action} a {status} job")
       self._save()
       self.lock.notify_all()
 
@@ -336,25 +374,36 @@ class Downloader:
 
   def _loop(self):
     while True:
-      with self.lock:
-        job = next((j for j in self.jobs if j["status"] == "queued"), None)
-        if job is None:
-          self.lock.wait()
-          continue
-        job["status"] = "info" if job["downloaded"] else "downloading"
-        self.cancel.discard(job["id"])
-        self._save()
       try:
-        self._run(job)
-        status, error = "done", ""
-      except Canceled:
+        self._step()
+      except Exception:
+        logging.exception("%s downloader error", LOG)
+        time.sleep(5)
+
+  def _step(self):
+    with self.lock:
+      job = next((j for j in self.jobs if j["status"] == "queued"), None)
+      if job is None:
+        self.lock.wait()
+        return
+      job.update(status="info" if job["downloaded"] else "downloading", started=time.time(), finished=None)
+      self.cancel.discard(job["id"])
+      self._save()
+    try:
+      self._run(job)
+      status, error = "done", ""
+    except Exception as e:
+      if job["id"] in self.cancel:
+        if os.path.exists(_part(job)):
+          os.remove(_part(job))
         status, error = "canceled", ""
-      except Exception as e:
+      else:
         logging.warning("%s download %s failed: %s", LOG, job["stem"], e)
         status, error = "failed", str(e) or type(e).__name__
-      with self.lock:
-        job.update(status=status, error=error, speed=0, finished=time.time())
-        self._save()
+    with self.lock:
+      self.cancel.discard(job["id"])
+      job.update(status=status, error=error, speed=0, finished=time.time())
+      self._save()
 
   def _run(self, job):
     target = job["target"]
@@ -366,7 +415,9 @@ class Downloader:
     self._info(job, target)
 
   def _download(self, job, target):
-    part = target + ".part"
+    if os.path.exists(target):
+      raise ValueError("file already exists")
+    part = _part(job)
     os.makedirs(os.path.dirname(target), exist_ok=True)
     h = hashlib.sha256()
     start = 0
@@ -377,13 +428,11 @@ class Downloader:
           start += len(chunk)
     s = _session(job["host"])
     headers = {"Range": f"bytes={start}-"} if start else {}
-    with s.get(job["download_url"], headers=headers, stream=True, timeout=(30, 120)) as r:
+    with s.get(job["download_url"], headers=headers, stream=True, timeout=(30, 60)) as r:
       if r.status_code in (401, 403):
         raise ValueError("Civitai refused the download: set an API key or cookie in Settings"
                          if not _auth() else f"Civitai refused the download (HTTP {r.status_code}): check the API key / cookie")
-      if r.status_code == 416 and start:
-        r.close()
-      else:
+      if r.status_code != 416 or not start:
         r.raise_for_status()
         ctype = r.headers.get("content-type", "")
         if "text/html" in ctype or "json" in ctype:
@@ -395,8 +444,6 @@ class Downloader:
         with open(part, "ab" if start else "wb") as f:
           for chunk in r.iter_content(CHUNK):
             if job["id"] in self.cancel:
-              f.close()
-              os.remove(part)
               raise Canceled()
             f.write(chunk)
             h.update(chunk)
@@ -408,23 +455,27 @@ class Downloader:
     digest = h.hexdigest()
     if job["sha256"] and digest != job["sha256"]:
       os.remove(part)
-      raise ValueError(f"sha256 mismatch ({digest[:12]}…), partial file deleted")
+      raise ValueError(f"sha256 mismatch ({digest[:12]}...), partial file deleted")
     if os.path.exists(target):
       raise ValueError("file already exists")
     os.rename(part, target)
 
   def _info(self, job, target):
-    rel = os.path.relpath(target, loras_dir())
-    base = _local_base()
-    r = requests.get(f"{base}/rgthree/api/loras/info/refresh", params={"files": rel}, timeout=600)
-    if r.status_code == 404:
-      job["warning"] = "rgthree not installed: no .rgthree-info.json written"
-      return
-    r.raise_for_status()
-    data = (r.json().get("data") or [{}])[0]
-    if not (data.get("raw") or {}).get("civitai"):
-      job["warning"] = "rgthree could not fetch Civitai info; use Fetch info in the LoRA info dialog"
     if job["note"]:
-      r = requests.post(f"{base}/rgthree/api/loras/info", params={"file": rel},
-                        data={"json": json.dumps({"userNote": job["note"]})}, timeout=600)
-      r.raise_for_status()
+      # Seed the info file with the note: rgthree's refresh merges into it and pushes the result to
+      # open tabs, which keep LoRA info cached until reloaded.
+      info_path = target + ".rgthree-info.json"
+      _write_json(info_path, {**_read_json(info_path, {}), "userNote": job["note"]})
+    try:
+      r = _local_get("/rgthree/api/loras/info/refresh", params={"files": os.path.relpath(target, loras_dir())})
+    except requests.RequestException as e:
+      job["warning"] = f"rgthree info refresh failed ({e}); use Fetch info in the LoRA info dialog"
+      return
+    if r.status_code == 404:
+      job["warning"] = "rgthree not installed: no Civitai info in .rgthree-info.json"
+    elif not r.ok:
+      job["warning"] = f"rgthree info refresh failed (HTTP {r.status_code}); use Fetch info in the LoRA info dialog"
+    else:
+      data = (r.json().get("data") or [None])[0] or {}
+      if not ((data.get("raw") or {}).get("civitai") or {}).get("modelId"):
+        job["warning"] = "rgthree could not fetch Civitai info; use Fetch info in the LoRA info dialog"

@@ -189,7 +189,12 @@ async function resolveUrl() {
 }
 
 let urlTimer;
-$("url").oninput = () => { clearTimeout(urlTimer); urlTimer = setTimeout(resolveUrl, 400); };
+$("url").oninput = () => {
+  clearTimeout(urlTimer);
+  resolveSeq++;
+  showResolved(null);
+  urlTimer = setTimeout(resolveUrl, 400);
+};
 $("stem-reset").onclick = () => { if (resolved) $("stem").value = resolved.stem; };
 
 $("submit").onclick = async () => {
@@ -212,6 +217,25 @@ $("submit").onclick = async () => {
   }
 };
 
+function clock(t) {
+  const d = new Date(t * 1000);
+  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  if (d.toDateString() === new Date().toDateString()) return hm;
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm}`;
+}
+
+function span(sec) {
+  sec = Math.max(0, Math.round(sec));
+  return sec < 60 ? `${sec}s` : sec < 3600 ? `${Math.floor(sec / 60)}m ${sec % 60}s` : `${Math.floor(sec / 3600)}h ${Math.floor(sec / 60) % 60}m`;
+}
+
+function times(j) {
+  let s = `added ${clock(j.created)}`;
+  if (j.finished) s += ` · ${j.status} ${clock(j.finished)}` + (j.started ? ` (${span(j.finished - j.started)})` : "");
+  else if (j.started && j.status !== "queued") s += ` · started ${clock(j.started)}`;
+  return s;
+}
+
 const STATUS = { queued: "Queued", downloading: "Downloading", info: "Writing info", done: "Done", failed: "Failed", canceled: "Canceled" };
 
 function renderJobs(jobs) {
@@ -233,6 +257,7 @@ function renderJobs(jobs) {
       ${j.status === "downloading" || (j.status === "failed" && j.done) ? `<div class="bar"><div style="width:${pct}%"></div></div>` : ""}
       <div class="meta"><a href="${esc(j.page_url)}" target="_blank" rel="noopener">${esc(j.title)} · ${esc(j.version_name)}</a>
         ${progress ? " · " + progress : ""}</div>
+      <div class="meta">${times(j)}</div>
       ${j.error ? `<div class="meta err">${esc(j.error)}</div>` : ""}
       ${j.warning ? `<div class="meta warn">${esc(j.warning)}</div>` : ""}
       ${j.note ? `<div class="meta">Note: ${esc(j.note)}</div>` : ""}
@@ -253,14 +278,26 @@ $("jobs").onclick = async (e) => {
 $("clear").onclick = async () => { await call("/lora-companion/dl/clear", {}); poll(); };
 
 let pollTimer;
+let polling = false;
+let pollAgain = false;
 async function poll() {
+  if (polling) {
+    pollAgain = true;
+    return;
+  }
   clearTimeout(pollTimer);
+  polling = true;
   let active = false;
   try {
     const { jobs } = await call("/lora-companion/dl/jobs");
     renderJobs(jobs);
     active = jobs.some((j) => ["queued", "downloading", "info"].includes(j.status));
   } catch {}
+  polling = false;
+  if (pollAgain) {
+    pollAgain = false;
+    return poll();
+  }
   pollTimer = setTimeout(poll, active ? 1000 : 5000);
 }
 
