@@ -41,7 +41,7 @@ civitai.red model URL into a subfolder of the loras folder.
 - Submit as many downloads as you like; they run one at a time. The queue is kept in
   `user/lora-companion/downloads.json`, and an interrupted download resumes after a restart.
 - Settings (`user/lora-companion/downloader.json`): root folder relative to the loras folder, hidden
-  subfolders, title words to remove. Most Civitai downloads need an API key (Civitai account
+  subfolders (folders starting with `.` are always hidden), title words to remove. Most Civitai downloads need an API key (Civitai account
   settings → API Keys) or a logged-in Cookie header; it is stored in
   `user/lora-companion/civitai_auth.txt` and only sent to civitai.com / civitai.red.
 

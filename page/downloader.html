@@ -223,11 +223,14 @@ $("submit").onclick = async () => {
   }
 };
 
-function clock(t) {
+const pad = (n) => String(n).padStart(2, "0");
+const day = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+// Date and time; just the time when it falls on the same day as `ref`.
+function clock(t, ref) {
   const d = new Date(t * 1000);
-  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-  if (d.toDateString() === new Date().toDateString()) return hm;
-  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm}`;
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return ref && day(new Date(ref * 1000)) === day(d) ? hm : `${day(d)} ${hm}`;
 }
 
 function span(sec) {
@@ -237,8 +240,8 @@ function span(sec) {
 
 function times(j) {
   let s = `added ${clock(j.created)}`;
-  if (j.finished) s += ` · ${j.status} ${clock(j.finished)}` + (j.started ? ` (${span(j.finished - j.started)})` : "");
-  else if (j.started && j.status !== "queued") s += ` · started ${clock(j.started)}`;
+  if (j.finished) s += ` · ${j.status} ${clock(j.finished, j.created)}` + (j.started ? ` (${span(j.finished - j.started)})` : "");
+  else if (j.started && j.status !== "queued") s += ` · started ${clock(j.started, j.created)}`;
   return s;
 }
 

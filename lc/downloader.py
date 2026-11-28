@@ -105,7 +105,8 @@ def subdirs(cfg):
   if not os.path.isdir(root):
     return []
   exclude = {e.lower() for e in cfg["exclude"]}
-  names = sorted(e.name for e in os.scandir(root) if e.is_dir() and e.name.lower() not in exclude)
+  names = sorted(e.name for e in os.scandir(root) if e.is_dir() and not e.name.startswith(".")
+                 and e.name.lower() not in exclude)
   return names or [""]
 
 
