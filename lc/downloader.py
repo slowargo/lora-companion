@@ -352,13 +352,13 @@ class Downloader:
       job = self._get(job_id)
       status = job["status"]
       if action == "cancel" and status == "queued":
-        job["status"] = "canceled"
+        job.update(status="canceled", finished=time.time())
       elif action == "cancel" and status == "downloading":
         self.cancel.add(job_id)
       elif action == "retry" and status in ("failed", "canceled"):
         if self._taken(job["target"], job_id) or (not job["downloaded"] and os.path.exists(job["target"])):
           raise ValueError("the file name is now used by another job or file")
-        job.update(status="queued", error="", warning="")
+        job.update(status="queued", error="", warning="", started=None, finished=None)
       elif action == "remove" and status not in ACTIVE:
         self.jobs.remove(job)
         if os.path.exists(_part(job)):
