@@ -19,7 +19,7 @@ Adds no graph nodes.
   LoRAs inside a folder whose name starts with `.` (at any depth) are left out of the chooser. Toggle
   **Show LoRAs in "." folders** in the Power Lora Loader right-click menu (or the setting under
   lora-companion) to list them; the choice is saved in the ComfyUI settings. Rows that already use
-  such a LoRA keep working.
+  such a LoRA keep working, but while it is hidden the chooser has no entry to highlight for them.
 - **Info dialog extras**:
   - LoRA type (LoRA / LoHa / LoKr / OFT / DoRA …, read from the safetensors header) and whether its
     order in the loader matters.

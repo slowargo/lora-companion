@@ -216,18 +216,12 @@ function isLoraRow(w) {
 const SHOW_DOT_SETTING = "LoraCompanion.ShowDotFolders";
 
 function showDotFolders() {
-  try {
-    return !!(app.extensionManager?.setting?.get(SHOW_DOT_SETTING) ?? app.ui?.settings?.getSettingValue(SHOW_DOT_SETTING));
-  } catch {
-    return false;
-  }
+  return !!app.extensionManager.setting.get(SHOW_DOT_SETTING);
 }
 
 async function toggleDotFolders() {
-  const value = !showDotFolders();
   try {
-    if (app.extensionManager?.setting?.set) await app.extensionManager.setting.set(SHOW_DOT_SETTING, value);
-    else await app.ui.settings.setSettingValueAsync(SHOW_DOT_SETTING, value);
+    await app.extensionManager.setting.set(SHOW_DOT_SETTING, !showDotFolders());
   } catch (e) {
     console.warn(TAG, "saving setting failed", e);
   }
