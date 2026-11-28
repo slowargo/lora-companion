@@ -211,6 +211,55 @@ function isLoraRow(w) {
   }
 }
 
+// ---------- loader rows: hidden folders ----------
+
+const SHOW_DOT_SETTING = "LoraCompanion.ShowDotFolders";
+
+function showDotFolders() {
+  try {
+    return !!(app.extensionManager?.setting?.get(SHOW_DOT_SETTING) ?? app.ui?.settings?.getSettingValue(SHOW_DOT_SETTING));
+  } catch {
+    return false;
+  }
+}
+
+async function toggleDotFolders() {
+  const value = !showDotFolders();
+  try {
+    if (app.extensionManager?.setting?.set) await app.extensionManager.setting.set(SHOW_DOT_SETTING, value);
+    else await app.ui.settings.setSettingValueAsync(SHOW_DOT_SETTING, value);
+  } catch (e) {
+    console.warn(TAG, "saving setting failed", e);
+  }
+}
+
+// A LoRA is hidden when any folder on its path (not the file itself) starts with ".".
+function inDotFolder(file) {
+  return String(file).split(/[\\/]/).slice(0, -1).some((s) => s.startsWith("."));
+}
+
+async function chooserLoras(rgthreeApi) {
+  const loras = await rgthreeApi.getLoras();
+  return showDotFolders() ? loras : loras.filter((l) => !inDotFolder(l.file));
+}
+
+function patchMenuToggle() {
+  const proto = LiteGraph.registered_node_types?.[PLL_TYPE]?.prototype;
+  if (typeof proto?.getExtraMenuOptions !== "function") {
+    console.warn(TAG, "Power Lora Loader menu not found; hidden folders toggle not added");
+    return;
+  }
+  const getExtraMenuOptions = proto.getExtraMenuOptions;
+  proto.getExtraMenuOptions = function (canvas, options) {
+    const r = getExtraMenuOptions.apply(this, arguments);
+    options?.push({
+      content: `${showDotFolders() ? "✓ " : ""}Show LoRAs in \".\" folders`,
+      callback: () => void toggleDotFolders(),
+    });
+    return r;
+  };
+}
+
 // Same computation as rgthree's RgthreePowerLoraLoader.showLoraChooser.
 async function chooserPrefix(node, rgthreeApi) {
   const match = node?.properties?.[MATCH_PROP];
@@ -221,7 +270,7 @@ async function chooserPrefix(node, rgthreeApi) {
   } catch {
     return "";
   }
-  const loras = (await rgthreeApi.getLoras()).map((l) => l.file).filter((l) => l.match(rgx));
+  const loras = (await chooserLoras(rgthreeApi)).map((l) => l.file).filter((l) => l.match(rgx));
   let prefix = loras[0] || "";
   for (const l of loras) {
     let i = 0;
@@ -247,7 +296,22 @@ function patchChooserPrefix(rgthreeApi) {
       console.warn(TAG, e);
     }
     pendingPrefix = { prefix, t: Date.now() };
-    return showLoraChooser.apply(this, arguments);
+    // rgthree calls rgthreeApi.getLoras() synchronously at the start of showLoraChooser; serve it
+    // the filtered list for that one call only, so its other users keep the full list.
+    const own = Object.prototype.hasOwnProperty.call(rgthreeApi, "getLoras");
+    const prev = rgthreeApi.getLoras;
+    let used = false;
+    rgthreeApi.getLoras = function () {
+      used = true;
+      return chooserLoras({ getLoras: () => prev.apply(rgthreeApi, arguments) });
+    };
+    try {
+      return showLoraChooser.apply(this, arguments);
+    } finally {
+      if (own) rgthreeApi.getLoras = prev;
+      else delete rgthreeApi.getLoras;
+      if (!used) console.warn(TAG, "showLoraChooser did not call getLoras; \".\" folders not hidden");
+    }
   };
 }
 
@@ -484,6 +548,15 @@ const CSS = `
 
 app.registerExtension({
   name: "lora-companion",
+  settings: [
+    {
+      id: SHOW_DOT_SETTING,
+      category: ["lora-companion", "Power Lora Loader", "Show dot folders"],
+      name: "Show LoRAs in folders starting with \".\" in the Power Lora Loader chooser",
+      type: "boolean",
+      defaultValue: false,
+    },
+  ],
   async setup() {
     document.head.append(el("style", { text: CSS }));
     api.addEventListener("lora-companion.stats", (e) => applyStats(e.detail?.stats));
@@ -507,6 +580,7 @@ app.registerExtension({
       const { LoraDialog, rgthreeApi } = await rgthree;
       patchInfoDialog(LoraDialog);
       patchChooserPrefix(rgthreeApi);
+      patchMenuToggle();
     } catch {
       // already reported
     }

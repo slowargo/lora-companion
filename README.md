@@ -16,6 +16,10 @@ Adds no graph nodes.
 - **Like / dislike counters** in the Power Lora Loader LoRA info dialog (`+` / `−`, never below 0).
 - **LoRA chooser** shows `(uses · 👍likes 👎dislikes)` after each LoRA name (zero counts omitted) and scrolls to and highlights the row's
   current LoRA. Switching an existing row to a different LoRA resets its toggle to on and its strength(s) to 1.
+  LoRAs inside a folder whose name starts with `.` (at any depth) are left out of the chooser. Toggle
+  **Show LoRAs in "." folders** in the Power Lora Loader right-click menu (or the setting under
+  lora-companion) to list them; the choice is saved in the ComfyUI settings. Rows that already use
+  such a LoRA keep working.
 - **Info dialog extras**:
   - LoRA type (LoRA / LoHa / LoKr / OFT / DoRA …, read from the safetensors header) and whether its
     order in the loader matters.
